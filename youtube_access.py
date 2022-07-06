@@ -57,62 +57,39 @@ class YouTube:
             print('Request not successful.')
             print(request.text)
 
+    @staticmethod
+    def remove_list_duplicates(lst):
+        return list(dict.fromkeys(lst))
+
     def _build_resource(self, api):
         return f'{self.url}{api}'
 
     def my_playlists(self):
         """Lists all the playlists of your YouTube channel in JSON format"""
 
-        params = dict(
-            part='snippet,contentDetails',
-            mine=True,
-        )
-
-        response = requests.get(
-            url=self._build_resource('playlists'),
-            params=params,
-            headers=self.headers
-        )
-
+        next_page_token = ''
         results = []
 
-        try:
+        while next_page_token is not None:
+
+            params = dict(
+                part='snippet,contentDetails',
+                mine=True,
+                pageToken=next_page_token
+            )
+
+            response = requests.get(
+                url=self._build_resource('playlists'),
+                params=params,
+                headers=self.headers,
+            )
+
+            self.request_status(response)
 
             for playlist in response.json()['items']:
                 results.append(playlist['id'])
+            next_page_token = response.json().get('nextPageToken')
 
-            # Get next page token
-            next_page_token = response.json()['nextPageToken']
-
-            # Loop through the pages of the response
-            while next_page_token:
-
-                params = dict(
-                    part='snippet,contentDetails',
-                    mine=True,
-                    pageToken=next_page_token
-                )
-                response = requests.get(
-                    url=self._build_resource('playlists'),
-                    params=params,
-                    headers=self.headers
-                )
-
-                # Update the response and the next page token
-                data = response.json()
-                next_page_token = data['nextPageToken']
-
-                # Append the video id's from the current page
-                for playlist in response.json()['items']:
-                    results.append(playlist['id'])
-
-        except KeyError:
-
-            # If there are no next pages we need to check if this is not the first page before we append anything
-            for playlist in response.json()['items']:
-                results.append(playlist['id'])
-
-        self.request_status(response)
         return results
 
     def create_playlist(self, title, description=None):
@@ -263,58 +240,31 @@ class YouTube:
     def retrieve_videos_from_playlist(self, playlist_id):
         """Retrieves all the songs from your playlist"""
 
-        songs_data = []
+        next_page_token = ''
+        results = []
 
-        params = dict(
-            part='snippet,contentDetails',
-            playlistId=playlist_id
-        )
+        while next_page_token is not None:
 
-        response = requests.get(
-            url=self._build_resource('playlistItems'),
-            params=params,
-            headers=self.headers,
-        )
+            params = dict(
+                part='snippet,contentDetails',
+                playlistId=playlist_id,
+                pageToken=next_page_token
+            )
 
-        # Append every video id of the playlist page to songs_data.
-        try:
+            response = requests.get(
+                url=self._build_resource('playlistItems'),
+                params=params,
+                headers=self.headers,
+            )
+
+            self.request_status(response)
 
             for song in response.json()['items']:
-                songs_data.append(song['snippet']['resourceId']['videoId'])
+                results.append(song['snippet']['resourceId']['videoId'])
 
-            # Get next page token
-            next_page_token = response.json()['nextPageToken']
+            next_page_token = response.json().get('nextPageToken')
 
-            # Loop through the pages of the response
-            while next_page_token:
-
-                params = dict(
-                    part='snippet',
-                    playlistId=playlist_id,
-                    pageToken=next_page_token
-                )
-                response = requests.get(
-                    url=self._build_resource('playlistItems'),
-                    params=params,
-                    headers=self.headers,
-                )
-
-                # Update the response and the next page token
-                data = response.json()
-                next_page_token = data['nextPageToken']
-
-                # Append the video id's from the current page
-                for song in response.json()['items']:
-                    songs_data.append(song['snippet']['resourceId']['videoId'])
-
-        except KeyError:
-
-            # If there are no next pages we need to check if this is not the first page before we append anything
-            for song in response.json()['items']:
-                songs_data.append(song['snippet']['resourceId']['videoId'])
-
-        self.request_status(response)
-        return songs_data
+        return results
 
     def clone_playlist(self, source_id):
         """Clones any playlist from YouTube to your account"""
@@ -337,11 +287,19 @@ class YouTube:
 
         self.delete_playlist(second_playlist_id)
 
-    def top_three_videos_from_playlist(self, playlist_id):
-        """Retrieves the top 3 videos by views from a specified playlist"""
+    def top_three_videos(self, playlist_id=None):
+        """Retrieves the top 3 videos by views from a specified playlist.
+        If no playlist is specified, all the playlists from the account will be searched"""
 
         video_statistics = []
-        video_ids = self.retrieve_videos_from_playlist(playlist_id)
+        video_ids = []
+
+        if playlist_id is not None:
+            video_ids = self.retrieve_videos_from_playlist(playlist_id)
+        else:
+            playlists = self.my_playlists()
+            for playlist in playlists:
+                video_ids.append(self.retrieve_videos_from_playlist(playlist))
 
         for video_id in video_ids:
             params = dict(
@@ -356,15 +314,20 @@ class YouTube:
             for video in response.json()['items']:
                 video_statistics.append([str(video['snippet']['title']), int(video['statistics']['viewCount'])])
 
+        video_statistics = sorted(video_statistics, key=lambda x: x[:][1], reverse=True)
         result = []
 
-        for i in range(min(3, len(video_statistics))):
-            result.append(video_statistics[i][0])
+        for item in video_statistics:
+            result.append(item[0])
+
+            result = self.remove_list_duplicates(result)
+            if len(result) == 3:
+                break
 
         return result
 
     def search(self, resource, resource_type='channel'):
-        """Search for a video, a playlist or a channel resource (or maybe combined)"""
+        """Search for a video, a playlist or a channel resource (or maybe combined)."""
 
         params = dict(
             part='snippet',
